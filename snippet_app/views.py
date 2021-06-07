@@ -1,11 +1,16 @@
 from django.contrib.auth.models import User
 from rest_framework import status
+from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from .serializers import TagSerializer, UserSerializer, TextSerializer
 from .models import Text, Tag
 from django.contrib.auth.hashers import make_password, check_password
+import datetime, jwt, os
+from binascii import hexlify
 
+
+secret_key = hexlify(os.urandom(50))
 
 # Create your views here.
 
@@ -20,11 +25,44 @@ class Account(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
 
+#login function with generating tokens.
+class Login(APIView):
+    def post(self, request):
+        username = request.data['username']
+        password = request.data['password']
+        user = User.objects.filter(username=username).first()
+        if user is None:
+            raise AuthenticationFailed("The User not found")
+        if check_password(password, user.password): 
+            payload = {
+                'id' : user.id,
+                'exp' : datetime.datetime.utcnow() + datetime.timedelta(minutes=30),
+                'iat' : datetime.datetime.utcnow()
+            }
+            token = jwt.encode(payload, secret_key, algorithm='HS256')
+            response = Response()
+            response.set_cookie(key='jwt', value=token, httponly=True)
+            response.data = {
+                'jwt' : token
+            }
+            return response
+        return Response({
+            "message" : "Invalid Password"
+        })
+        
+            
 """ get function is used to get the all text snippets and count of the text snippets.
 post function is used to create a new text snippet."""
 class Snippet(APIView):
     
     def get(self, request):
+        token = request.COOKIES.get('jwt')
+        if not token:
+            raise AuthenticationFailed('UnAuthenticate!')
+        try:
+            payload = jwt.decode(token, secret_key, algorithms=['HS256'])
+        except jwt.ExpiredSignatureError:
+            raise AuthenticationFailed('UnAuthenticated!')
         snippets = Text.objects.all()
         serializer = TextSerializer(snippets, many=True)
         return Response(serializer.data)
